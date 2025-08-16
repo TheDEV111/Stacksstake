@@ -195,3 +195,55 @@
     
     ;; Return new status
     (ok (var-get contract-active))))
+
+;; Read-only functions for querying contract state
+
+;; Get staker information
+(define-read-only (get-staker-info (staker principal))
+  (map-get? stakers { staker: staker }))
+
+;; Get total amount staked in the pool
+(define-read-only (get-total-staked)
+  (var-get total-staked))
+
+;; Get total rewards distributed
+(define-read-only (get-total-rewards-distributed)
+  (var-get total-rewards-distributed))
+
+;; Get contract active status
+(define-read-only (get-contract-status)
+  (var-get contract-active))
+
+;; Get contract owner
+(define-read-only (get-contract-owner)
+  contract-owner)
+
+;; Calculate potential reward for a staker given a reward amount
+(define-read-only (calculate-staker-reward (staker principal) (total-reward uint))
+  (match (map-get? stakers { staker: staker })
+    staker-data
+    (if (> (var-get total-staked) u0)
+      (some (calculate-reward-share (get amount staker-data) total-reward))
+      none)
+    none))
+
+;; Get minimum stake amount
+(define-read-only (get-min-stake-amount)
+  min-stake-amount)
+
+;; Check if a principal is a staker
+(define-read-only (is-staker (principal-to-check principal))
+  (is-some (map-get? stakers { staker: principal-to-check })))
+
+;; Get staker's stake percentage of total pool
+(define-read-only (get-staker-percentage (staker principal))
+  (match (map-get? stakers { staker: staker })
+    staker-data
+    (if (> (var-get total-staked) u0)
+      (some (/ (* (get amount staker-data) u10000) (var-get total-staked))) ;; Returns percentage * 100 (e.g., 2500 = 25%)
+      none)
+    none))
+
+;; Get contract balance
+(define-read-only (get-contract-balance)
+  (stx-get-balance (as-contract tx-sender)))
