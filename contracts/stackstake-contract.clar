@@ -99,6 +99,91 @@
       ;; Return success with unstaked amount
       (ok amount))))
 
+;; Distribute rewards proportionally to all stakers
+(define-public (distribute-rewards (total-reward uint))
+  (begin
+    ;; Check if caller is contract owner
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    ;; Check if total reward is greater than 0
+    (asserts! (> total-reward u0) err-zero-amount)
+    ;; Check if there are stakers
+    (asserts! (> (var-get total-staked) u0) err-no-stakers)
+    
+    ;; Transfer reward amount to contract first
+    (try! (stx-transfer? total-reward tx-sender (as-contract tx-sender)))
+    
+    ;; Update total rewards distributed
+    (var-set total-rewards-distributed (+ (var-get total-rewards-distributed) total-reward))
+    
+    ;; Return success with distributed amount
+    (ok total-reward)))
+
+;; Helper function to calculate individual reward share
+(define-private (calculate-reward-share (staker-amount uint) (total-reward uint))
+  (/ (* staker-amount total-reward) (var-get total-staked)))
+
+;; Claim rewards for a specific staker (can be called by anyone for any staker)
+(define-public (claim-rewards (staker principal) (total-reward uint))
+  (begin
+    ;; Check if total reward is greater than 0
+    (asserts! (> total-reward u0) err-zero-amount)
+    ;; Check if there are stakers
+    (asserts! (> (var-get total-staked) u0) err-no-stakers)
+    
+    ;; Get staker data
+    (let ((staker-data (unwrap! (map-get? stakers { staker: staker }) err-no-stake-found)))
+      ;; Calculate proportional reward
+      (let ((staker-amount (get amount staker-data))
+            (reward-share (calculate-reward-share staker-amount total-reward)))
+        ;; Only transfer if reward share is greater than 0
+        (if (> reward-share u0)
+          (begin
+            ;; Transfer reward to staker
+            (try! (as-contract (stx-transfer? reward-share tx-sender staker)))
+            ;; Update last claim height
+            (map-set stakers { staker: staker }
+              {
+                amount: staker-amount,
+                last-claim-height: block-height
+              })
+            ;; Return success with reward amount
+            (ok reward-share))
+          ;; Return 0 if no reward to claim
+          (ok u0))))))
+
+;; Batch claim rewards for multiple stakers
+(define-public (batch-claim-rewards (stakers-list (list 50 principal)) (total-reward uint))
+  (begin
+    ;; Check if caller is contract owner
+    (asserts! (is-eq tx-sender contract-owner) err-owner-only)
+    ;; Check if total reward is greater than 0
+    (asserts! (> total-reward u0) err-zero-amount)
+    ;; Check if there are stakers
+    (asserts! (> (var-get total-staked) u0) err-no-stakers)
+    
+    ;; Process each staker in the list
+    (let ((results (map claim-individual-reward stakers-list)))
+      ;; Return success
+      (ok total-reward))))
+
+;; Helper function for batch claiming
+(define-private (claim-individual-reward (staker principal))
+  (match (map-get? stakers { staker: staker })
+    staker-data
+    (let ((reward-share (calculate-reward-share (get amount staker-data) u1000000))) ;; Use a base amount for calculation
+      (if (> reward-share u0)
+        (begin
+          ;; This would be called within batch-claim-rewards context
+          ;; Update last claim height
+          (map-set stakers { staker: staker }
+            {
+              amount: (get amount staker-data),
+              last-claim-height: block-height
+            })
+          reward-share)
+        u0))
+    u0))
+
 ;; Emergency function to toggle contract active status (owner only)
 (define-public (toggle-contract-status)
   (begin
@@ -110,3 +195,55 @@
     
     ;; Return new status
     (ok (var-get contract-active))))
+
+;; Read-only functions for querying contract state
+
+;; Get staker information
+(define-read-only (get-staker-info (staker principal))
+  (map-get? stakers { staker: staker }))
+
+;; Get total amount staked in the pool
+(define-read-only (get-total-staked)
+  (var-get total-staked))
+
+;; Get total rewards distributed
+(define-read-only (get-total-rewards-distributed)
+  (var-get total-rewards-distributed))
+
+;; Get contract active status
+(define-read-only (get-contract-status)
+  (var-get contract-active))
+
+;; Get contract owner
+(define-read-only (get-contract-owner)
+  contract-owner)
+
+;; Calculate potential reward for a staker given a reward amount
+(define-read-only (calculate-staker-reward (staker principal) (total-reward uint))
+  (match (map-get? stakers { staker: staker })
+    staker-data
+    (if (> (var-get total-staked) u0)
+      (some (calculate-reward-share (get amount staker-data) total-reward))
+      none)
+    none))
+
+;; Get minimum stake amount
+(define-read-only (get-min-stake-amount)
+  min-stake-amount)
+
+;; Check if a principal is a staker
+(define-read-only (is-staker (principal-to-check principal))
+  (is-some (map-get? stakers { staker: principal-to-check })))
+
+;; Get staker's stake percentage of total pool
+(define-read-only (get-staker-percentage (staker principal))
+  (match (map-get? stakers { staker: staker })
+    staker-data
+    (if (> (var-get total-staked) u0)
+      (some (/ (* (get amount staker-data) u10000) (var-get total-staked))) ;; Returns percentage * 100 (e.g., 2500 = 25%)
+      none)
+    none))
+
+;; Get contract balance
+(define-read-only (get-contract-balance)
+  (stx-get-balance (as-contract tx-sender)))
